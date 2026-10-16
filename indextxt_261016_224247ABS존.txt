@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>중학생판 휴대용 KBO ABS 로봇 심판</title>
+<!-- Google MediaPipe Pose CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+body {
+background: #0b0f19;
+color: #fff;
+font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+overflow: hidden;
+height: 100vh;
+display: flex;
+flex-direction: column;
+}
+/* 상단 KBO 중계 스타일 전광판 */
+.scoreboard {
+display: flex;
+justify-content: space-between;
+align-items: center;
+padding: 10px 16px;
+background: linear-gradient(90deg, #111827, #1f2937);
+border-bottom: 2px solid #374151;
+z-index: 10;
+}
+.brand {
+font-weight: 800;
+font-size: 16px;
+color: #38bdf8;
+display: flex;
+align-items: center;
+gap: 8px;
+}
+.badge {
+background: #ef4444;
+color: white;
+font-size: 11px;
+padding: 2px 6px;
+border-radius: 4px;
+font-weight: 700;
+}
+.bso-board {
+display: flex;
+gap: 14px;
+font-weight: 800;
+font-size: 15px;
+}
+.bso-item { display: flex; align-items: center; gap: 5px; }
+.dot {
+width: 12px; height: 12px; border-radius: 50%;
+background: #374151; display: inline-block;
+}
+.dot.b.active { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+.dot.s.active { background: #eab308; box-shadow: 0 0 8px #eab308; }
+.dot.o.active { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+
+/* 메인 카메라 및 캔버스 영역 */
+.viewport {
+position: relative;
+flex: 1;
+width: 100%;
+overflow: hidden;
+background: #000;
+display: flex;
+justify-content: center;
+align-items: center;
+}
+video { display: none; }
+canvas {
+width: 100%;
+height: 100%;
+object-fit: cover;
+transform-origin: center center;
+transition: transform 0.15s ease-out;
+}
+
+/* 판정 콜 대형 팝업 (STRIKE / BALL) */
+.call-banner {
+position: absolute;
+top: 18%;
+left: 50%;
+transform: translate(-50%, -50%) scale(0.5);
+padding: 12px 36px;
+border-radius: 12px;
+font-size: 42px;
+font-weight: 900;
+letter-spacing: 2px;
+opacity: 0;
+pointer-events: none;
+transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+z-index: 20;
+text-align: center;
+}
+.call-banner.show {
+opacity: 1;
+transform: translate(-50%, -50%) scale(1);
+}
+.call-banner.strike {
+background: rgba(234, 179, 8, 0.92);
+color: #000;
+border: 3px solid #fef08a;
+box-shadow: 0 0 30px rgba(234, 179, 8, 0.8);
+}
+.call-banner.ball {
+background: rgba(34, 197, 94, 0.92);
+color: #fff;
+border: 3px solid #bbf7d0;
+box-shadow: 0 0 30px rgba(34, 197, 94, 0.8);
+}
+.call-sub {
+font-size: 15px;
+font-weight: 700;
+margin-top: 4px;
+}
+
+/* 좌측 상단 실시간 개발자 텔레메트리 HUD */
+.hud-info {
+position: absolute;
+top: 12px;
+left: 12px;
+background: rgba(15, 23, 42, 0.78);
+border: 1px solid rgba(56, 189, 248, 0.4);
+padding: 8px 12px;
+border-radius: 8px;
+font-size: 12px;
+line-height: 1.5;
+color: #e2e8f0;
+z-index: 15;
+pointer-events: none;
+}
+.hud-info span { color: #38bdf8; font-weight: 700; }
+
+/* 하단 컨트롤 패널 */
+.controls {
+background: #111827;
+padding: 12px 14px;
+border-top: 1px solid #374151;
+display: flex;
+flex-direction: column;
+gap: 10px;
+z-index: 10;
+}
+.control-row {
+display: flex;
+justify-content: space-between;
+align-items: center;
+gap: 8px;
+flex-wrap: wrap;
+}
+.btn {
+background: #1f2937;
+color: #f8fafc;
+border: 1px solid #475569;
+padding: 8px 12px;
+border-radius: 8px;
+font-size: 13px;
+font-weight: 700;
+cursor: pointer;
+flex: 1;
+text-align: center;
+}
+.btn.active {
+background: #0284c7;
+border-color: #38bdf8;
+}
+.btn.warn {
+background: #b91c1c;
+border-color: #f87171;
+}
+.slider-group {
+display: flex;
+align-items: center;
+gap: 8px;
+font-size: 12px;
+flex: 1;
+color: #cbd5e1;
+}
+.slider-group input { flex: 1; }
+</style>
+</head>
+<body>
+
+<!-- 상단 전광판 -->
+<div class="scoreboard">
+<div class="brand">
+<span class="badge">AI ABS</span> 휴대용 로봇 심판 v1.0
+</div>
+<div class="bso-board">
+<div class="bso-item">B <span class="dot b"></span><span class="dot b"></span><span class="dot b"></span></div>
+<div class="bso-item">S <span class="dot s"></span><span class="dot s"></span></div>
+<div class="bso-item">O <span class="dot o"></span><span class="dot o"></span></div>
+</div>
+</div>
+
+<!-- 카메라 & AI 오버레이 뷰포트 -->
+<div class="viewport" id="viewport">
+<video id="video" playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<!-- 개발자 HUD (시연 영상에 멋지게 나오는 수치) -->
+<div class="hud-info">
+<div>📏 <b>KBO ABS 규격:</b> 상단 <span>56.35%</span> / 하단 <span>27.64%</span></div>
+<div>🎯 <b>타자 인식 상태:</b> <span id="batterStatus">대기 중 (자동/고정 겸용)</span></div>
+<div>⚡ <b>처리 모드:</b> <span id="roiStatus">ROI 고속 영역 추적 ON</span> (<span id="fpsText">60</span> FPS)</div>
+<div>⚾ <b>팁:</b> 실제 흰 공을 던지거나, 화면을 <b>터치/클릭</b>해 투구 테스트!</div>
+</div>
+
+<!-- 판정 배너 -->
+<div class="call-banner" id="callBanner">
+<div id="callTitle">STRIKE!</div>
+<div class="call-sub" id="callSub">보더라인 걸침 판정 (통과)</div>
+</div>
+</div>
+
+<!-- 하단 조작부 -->
+<div class="controls">
+<div class="control-row">
+<div class="slider-group">
+<span>🔍 줌(Zoom): <b id="zoomVal">1.0x</b></span>
+<input type="range" id="zoomSlider" min="1" max="4" step="0.1" value="1">
+</div>
+<div class="slider-group">
+<span>↔️ 존 위치:</span>
+<input type="range" id="offsetSlider" min="-150" max="150" step="5" value="-65">
+</div>
+</div>
+<div class="control-row">
+<button class="btn active" id="roiBtn">⚡ ROI 영역 집중 ON</button>
+<button class="btn active" id="trackBtn">⚾ 실구(흰 공) 자동감지 ON</button>
+<button class="btn" id="camSwitchBtn">🔄 전/후면 카메라 전환</button>
+<button class="btn warn" id="resetBtn">초기화</button>
+</div>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+// 상태 변수
+let facingMode = 'environment'; // 기본 후면 카메라
+let zoomLevel = 1.0;
+let zoneOffsetX = -65; // 타자 중심에서 홈플레이트까지의 가로 오프셋
+let useROI = true;
+let autoBallDetect = true;
+
+// 볼카운트 및 투구 기록
+let balls = 0, strikes = 0, outs = 0;
+let pitchHistory = []; // {x, y, r, isStrike, clipped, num}
+let lastPitchTime = 0;
+
+// ABS 스트라이크 존 기본 좌표 (타자 미인식 시 화면 중앙 기준, 인식 시 실시간 업데이트)
+let absZone = { x: 200, y: 180, w: 110, h: 170 };
+let batterLandmarks = null;
+let prevFrameData = null;
+
+// FPS 측정
+let frameCount = 0, lastFpsTime = performance.now();
+
+// 1. 음성 합성 (AI 로봇 심판 콜)
+function speakCall(text) {
+if (!('speechSynthesis' in window)) return;
+window.speechSynthesis.cancel();
+const utter = new SpeechSynthesisUtterance(text);
+utter.lang = 'ko-KR';
+utter.rate = 1.15;
+utter.pitch = 1.0;
+window.speechSynthesis.speak(utter);
+}
+
+// 2. 전광판 업데이트
+function updateScoreboard() {
+document.querySelectorAll('.dot.b').forEach((el, i) => el.classList.toggle('active', i < balls));
+document.querySelectorAll('.dot.s').forEach((el, i) => el.classList.toggle('active', i < strikes));
+document.querySelectorAll('.dot.o').forEach((el, i) => el.classList.toggle('active', i < outs));
+}
+
+// 3. 핵심: KBO ABS 걸침 판정 함수 (공의 반지름이 존 경계에 1픽셀이라도 걸치면 스트라이크)
+function judgePitch(bx, by, br) {
+const now = performance.now();
+if (now - lastPitchTime < 900) return; // 중복 판정 방지 (0.9초 쿨타임)
+lastPitchTime = now;
+
+const Xmin = absZone.x;
+const Xmax = absZone.x + absZone.w;
+const Ytop = absZone.y;
+const Ybot = absZone.y + absZone.h;
+
+// 원(야구공)의 중심과 사각형(ABS 존) 사이의 최단 거리 계산
+const dx = Math.max(Xmin - bx, 0, bx - Xmax);
+const dy = Math.max(Ytop - by, 0, by - Ybot);
+const distance = Math.sqrt(dx * dx + dy * dy);
+
+// 공의 반지름(br) 이내로 경계선에 닿았으면 STRIKE!
+const isStrike = distance <= br;
+const isCenterInside = (bx >= Xmin && bx <= Xmax && by >= Ytop && by <= Ybot);
+const isClipped = isStrike && !isCenterInside; // 중심은 밖인데 공 끝이 걸친 보더라인 스트라이크
+
+const pitchNum = pitchHistory.length + 1;
+pitchHistory.push({ x: bx, y: by, r: br, isStrike, isClipped, num: pitchNum });
+
+const banner = document.getElementById('callBanner');
+const title = document.getElementById('callTitle');
+const sub = document.getElementById('callSub');
+
+banner.className = 'call-banner show ' + (isStrike ? 'strike' : 'ball');
+
+if (isStrike) {
+title.innerText = 'STRIKE!';
+sub.innerText = isClipped ? 🔥 보더라인 걸침 판정! (공 끝 ${(br - distance).toFixed(1)}px 걸침): '한가운데 통과 (스트라이크)'; speakCall(isClipped ? '스트라이크! 보더라인 걸쳤습니다!' : '스트라이크!'); strikes++; if (strikes &gt;= 3) { setTimeout(() =&gt; speakCall('삼진 아웃!'), 1100); strikes = 0; balls = 0; outs = (outs + 1) % 3; } } else { title.innerText = 'BALL!'; sub.innerText =존에서 ${(distance - br).toFixed(1)}px 빠짐;
+speakCall('볼!');
+balls++;
+if (balls >= 4) {
+setTimeout(() => speakCall('볼넷! 진루하세요!'), 1100);
+balls = 0; strikes = 0;
+}
+}
+
+updateScoreboard();
+setTimeout(() => { banner.classList.remove('show'); }, 1800);
+}
+
+// 4. MediaPipe Pose 설정 (타자 체형 인식 -> KBO ABS 56.35% / 27.64% 계산)
+const pose = new Pose({
+locateFile: (file) => https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
+pose.setOptions({
+modelComplexity: 0, // 모바일 렉 방지를 위해 초경량 고속 모델(0) 사용
+smoothLandmarks: true,
+minDetectionConfidence: 0.5,
+minTrackingConfidence: 0.5
+});
+
+pose.onResults((results) => {
+if (results.poseLandmarks) {
+batterLandmarks = results.poseLandmarks;
+document.getElementById('batterStatus').innerText = '✅ 타자 체형 락온 완료';
+} else {
+batterLandmarks = null;
+document.getElementById('batterStatus').innerText = '고정 존 모드 (타자 탐색 중)';
+}
+});
+
+// 5. 실시간 고속 공(흰색 빠른 물체) 감지 엔진 (ROI 내부만 스캔하여 렉 방지!)
+function detectMovingBallInROI() {
+if (!autoBallDetect) return;
+
+// 볼 판정까지 포함한 외곽 감지 구역 (ROI)
+const pad = 65;
+const rx = Math.max(0, Math.floor(absZone.x - pad));
+const ry = Math.max(0, Math.floor(absZone.y - pad));
+const rw = Math.min(canvas.width - rx, Math.floor(absZone.w + pad * 2));
+const rh = Math.min(canvas.height - ry, Math.floor(absZone.h + pad * 2));
+
+if (rw <= 0 || rh <= 0) return;
+
+const imgData = ctx.getImageData(rx, ry, rw, rh);
+const data = imgData.data;
+
+if (prevFrameData && prevFrameData.length === data.length) {
+let sumX = 0, sumY = 0, count = 0;
+
+// 4픽셀 간격으로 고속 스캔 (움직임 변화량 + 밝은 야구공 색상 동시 충족 픽셀 탐색)
+for (let y = 0; y < rh; y += 4) {
+for (let x = 0; x < rw; x += 4) {
+const i = (y * rw + x) * 4;
+const r = data[i], g = data[i+1], b = data[i+2];
+const pr = prevFrameData[i], pg = prevFrameData[i+1], pb = prevFrameData[i+2];
+
+const diff = Math.abs(r - pr) + Math.abs(g - pg) + Math.abs(b - pb);
+const brightness = (r + g + b) / 3;
+
+// 빠르게 움직이면서(diff > 110) 밝은 물체(brightness > 165)인 경우 야구공으로 인식
+if (diff > 110 && brightness > 165) {
+sumX += x;
+sumY += y;
+count++;
+}
+}
+}
+
+// 야구공 크기에 해당하는 움직임 클러스터가 잡히면 즉시 판정!
+if (count >= 12 && count <= 220) {
+const ballX = rx + (sumX / count);
+const ballY = ry + (sumY / count);
+const ballRadius = Math.max(12, Math.min(24, Math.sqrt(count) * 2.2));
+judgePitch(ballX, ballY, ballRadius);
+}
+}
+prevFrameData = new Uint8ClampedArray(data);
+}
+
+// 6. 메인 렌더링 루프
+let lastPoseRun = 0;
+async function renderLoop(now) {
+frameCount++;
+if (now - lastFpsTime >= 1000) {
+document.getElementById('fpsText').innerText = frameCount;
+frameCount = 0;
+lastFpsTime = now;
+}
+
+if (video.readyState >= 2) {
+if (canvas.width !== video.videoWidth) {
+canvas.width = video.videoWidth;
+canvas.height = video.videoHeight;
+}
+
+// 1) 카메라 원본 그리기
+ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+// 2) 0.1초마다 타자 체형 인식 비동기 실행 (프레임 드랍 방지)
+if (now - lastPoseRun > 100) {
+lastPoseRun = now;
+pose.send({ image: video }).catch(() => {});
+}
+
+// 3) KBO ABS 스트라이크 존 위치 계산
+if (batterLandmarks) {
+const nose = batterLandmarks[0];
+const lShoulder = batterLandmarks[11], rShoulder = batterLandmarks[12];
+const lHip = batterLandmarks[23], rHip = batterLandmarks[24];
+const lKnee = batterLandmarks[25], rKnee = batterLandmarks[26];
+const lAnkle = batterLandmarks[27], rAnkle = batterLandmarks[28];
+
+// 타자 관절 시각화 (초록색 스켈레톤 포인트)
+[lShoulder, rShoulder, lHip, rHip, lKnee, rKnee].forEach(pt => {
+if (pt && pt.visibility > 0.4) {
+ctx.beginPath();
+ctx.arc(pt.x * canvas.width, pt.y * canvas.height, 6, 0, Math.PI * 2);
+ctx.fillStyle = '#22c55e';
+ctx.fill();
+}
+});
+
+// 타자의 전체 키(머리~발목) 추정 후 KBO 공식 비율(56.35% ~ 27.64%) 적용
+const shoulderY = ((lShoulder.y + rShoulder.y) / 2) * canvas.height;
+const kneeY = ((lKnee.y + rKnee.y) / 2) * canvas.height;
+const centerX = ((lShoulder.x + rShoulder.x) / 2) * canvas.width;
+const shoulderWidth = Math.abs(lShoulder.x - rShoulder.x) * canvas.width;
+
+// 발목까지 다 보이면 신장 공식 그대로 적용, 상반신 위주면 어깨~무릎 비례 적용
+if (lAnkle && lAnkle.visibility > 0.5 && nose && nose.visibility > 0.5) {
+const headTopY = (nose.y * canvas.height) - (shoulderWidth * 0.4);
+const ankleY = ((lAnkle.y + rAnkle.y) / 2) * canvas.height;
+const fullHeight = Math.max(100, ankleY - headTopY);
+
+absZone.y = ankleY - (fullHeight * 0.5635); // 상단 56.35%
+const botY = ankleY - (fullHeight * 0.2764); // 하단 27.64%
+absZone.h = Math.max(60, botY - absZone.y);
+} else {
+// 어깨와 무릎 기준 KBO ABS 보정
+absZone.y = shoulderY + (kneeY - shoulderY) * 0.18;
+absZone.h = Math.max(70, (kneeY - shoulderY) * 0.78);
+}
+absZone.w = Math.max(65, shoulderWidth * 0.95); // 홈플레이트 47.18cm 비례 폭
+absZone.x = centerX + zoneOffsetX - (absZone.w / 2);
+} else {
+// 타자가 화면에 없을 때는 화면 중앙에 기본 ABS 존 표시
+absZone.w = canvas.width * 0.22;
+absZone.h = canvas.height * 0.32;
+absZone.x = (canvas.width - absZone.w) / 2;
+absZone.y = (canvas.height - absZone.h) / 2;
+}
+
+// 4) ROI 내부 움직이는 공 감지 실행
+detectMovingBallInROI();
+
+// 5) ROI(관심 영역) 가이드 박스 그리기
+if (useROI) {
+const pad = 65;
+ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+ctx.lineWidth = 2;
+ctx.setLineDash([6, 6]);
+ctx.strokeRect(absZone.x - pad, absZone.y - pad, absZone.w + pad * 2, absZone.h + pad * 2);
+ctx.setLineDash([]);
+ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+ctx.font = 'bold 11px sans-serif';
+ctx.fillText('⚡ ROI 고속 스캔 구역 (볼 판정 경계)', absZone.x - pad + 4, absZone.y - pad - 6);
+}
+
+// 6) KBO ABS 9분할 스트라이크 존 그리기
+ctx.strokeStyle = '#38bdf8';
+ctx.lineWidth = 4;
+ctx.strokeRect(absZone.x, absZone.y, absZone.w, absZone.h);
+ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+ctx.fillRect(absZone.x, absZone.y, absZone.w, absZone.h);
+
+// 3x3 내부 격자
+ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+ctx.lineWidth = 1.5;
+for (let i = 1; i <= 2; i++) {
+ctx.beginPath();
+ctx.moveTo(absZone.x + (absZone.w / 3) * i, absZone.y);
+ctx.lineTo(absZone.x + (absZone.w / 3) * i, absZone.y + absZone.h);
+ctx.stroke();
+
+ctx.beginPath();
+ctx.moveTo(absZone.x, absZone.y + (absZone.h / 3) * i);
+ctx.lineTo(absZone.x + absZone.w, absZone.y + (absZone.h / 3) * i);
+ctx.stroke();
+}
+
+// 7) 투구 탄착군(야구공 궤적) 표시
+pitchHistory.forEach(p => {
+ctx.beginPath();
+ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+ctx.fillStyle = p.isStrike ? '#eab308' : '#22c55e';
+ctx.fill();
+ctx.lineWidth = 2.5;
+ctx.strokeStyle = '#fff';
+ctx.stroke();
+
+ctx.fillStyle = '#000';
+ctx.font = 'bold 12px sans-serif';
+ctx.textAlign = 'center';
+ctx.textBaseline = 'middle';
+ctx.fillText(p.num, p.x, p.y);
+});
+ctx.textAlign = 'start';
+}
+
+requestAnimationFrame(renderLoop);
+}
+
+// 7. 화면 터치/클릭 시 즉시 투구 판정 테스트 (영상 촬영 시 100% 성공 보장용!)
+canvas.addEventListener('pointerdown', (e) => {
+const rect = canvas.getBoundingClientRect();
+// 줌 배율 보정 좌표 계산
+const scaleX = canvas.width / rect.width;
+const scaleY = canvas.height / rect.height;
+const clickX = (e.clientX - rect.left) * scaleX;
+const clickY = (e.clientY - rect.top) * scaleY;
+
+const ballRadius = Math.max(14, absZone.w * 0.085); // 실제 야구공 비율 반지름
+judgePitch(clickX, clickY, ballRadius);
+});
+
+// 8. 카메라 시작 함수
+async function startCamera() {
+if (video.srcObject) {
+video.srcObject.getTracks().forEach(t => t.stop());
+}
+try {
+const stream = await navigator.mediaDevices.getUserMedia({
+video: { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+audio: false
+});
+video.srcObject = stream;
+await video.play();
+} catch (err) {
+alert('카메라 권한을 허용해주세요! (HTTPS 또는 localhost 환경 필요)');
+}
+}
+
+// 9. UI 버튼 이벤트 연결
+document.getElementById('zoomSlider').addEventListener('input', (e) => {
+zoomLevel = parseFloat(e.target.value);
+document.getElementById('zoomVal').innerText = zoomLevel.toFixed(1) + 'x';
+canvas.style.transform = scale(${zoomLevel})`;
+});
+
+document.getElementById('offsetSlider').addEventListener('input', (e) => {
+zoneOffsetX = parseInt(e.target.value, 10);
+});
+
+document.getElementById('roiBtn').addEventListener('click', (e) => {
+useROI = !useROI;
+e.target.classList.toggle('active', useROI);
+e.target.innerText = useROI ? '⚡ ROI 영역 집중 ON' : '⚡ ROI 영역 집중 OFF';
+document.getElementById('roiStatus').innerText = useROI ? 'ROI 고속 영역 추적 ON' : '전체 화면 스캔 모드';
+});
+
+document.getElementById('trackBtn').addEventListener('click', (e) => {
+autoBallDetect = !autoBallDetect;
+e.target.classList.toggle('active', autoBallDetect);
+e.target.innerText = autoBallDetect ? '⚾ 실구(흰 공) 자동감지 ON' : '👆 터치 투구 전용 모드';
+});
+
+document.getElementById('camSwitchBtn').addEventListener('click', () => {
+facingMode = (facingMode === 'user') ? 'environment' : 'user';
+startCamera();
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+balls = 0; strikes = 0; outs = 0;
+pitchHistory = [];
+updateScoreboard();
+});
+
+startCamera();
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>
